@@ -1,0 +1,4 @@
+node_modules/
+.env
+bugflow_data.json
+bugflow.db
