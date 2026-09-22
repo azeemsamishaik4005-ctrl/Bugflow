@@ -93,8 +93,10 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Delete sprint
-router.delete('/:id', authMiddleware, async (req, res) => {
+const { authorizeRoles } = require('../middleware/auth');
+
+// Delete sprint (Admin or Project Manager)
+router.delete('/:id', authMiddleware, authorizeRoles('admin', 'project_manager'), async (req, res) => {
   try {
     const sprintId = req.params.id;
     const existing = await queryOne('SELECT * FROM sprints WHERE id = ?', [sprintId]);

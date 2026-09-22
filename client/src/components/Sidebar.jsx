@@ -1,16 +1,18 @@
 import React from 'react';
-import { LayoutDashboard, AlertCircle, FolderKanban, LogOut, Sparkles, UserCheck, Bell, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, AlertCircle, FolderKanban, LogOut, Sparkles, UserCheck, Bell, Sun, Moon, BarChart3 } from 'lucide-react';
 import { useNotifications } from '../context/NotificationContext';
 
 export default function Sidebar({ activeTab, setActiveTab, user, onLogout, onRequestReportIssue, theme, toggleTheme }) {
   const { unreadCount } = useNotifications();
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'issues', label: 'Issues', icon: AlertCircle },
     { id: 'sprints', label: 'Sprints', icon: LayoutDashboard },
     { id: 'projects', label: 'Projects', icon: FolderKanban },
     { id: 'notifications', label: 'Notifications', icon: Bell },
   ];
+
 
   return (
     <aside style={{

@@ -2,15 +2,18 @@ import React, { useState, useEffect } from 'react';
 import AuthPage from './components/AuthPage.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Dashboard from './components/Dashboard.jsx';
+import AnalyticsView from './components/AnalyticsView.jsx';
 import ProjectsView from './components/ProjectsView.jsx';
 import SprintPlanning from './components/SprintPlanning.jsx';
 import ReportIssueModal from './components/ReportIssueModal.jsx';
 import NotificationsView from './components/NotificationsView.jsx';
 import IssuesView from './components/IssuesView.jsx';
+import AIAssistantChatbot from './components/AIAssistantChatbot.jsx';
 import { NotificationProvider } from './context/NotificationContext.jsx';
 
+
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('bugflow_token') || null);
+  const [token, setToken] = useState(localStorage.getItem('defectx_token') || localStorage.getItem('bugflow_token') || null);
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   
@@ -21,7 +24,7 @@ export default function App() {
   const [sprints, setSprints] = useState([]);
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem('bugflow_theme');
+    const saved = localStorage.getItem('defectx_theme') || localStorage.getItem('bugflow_theme');
     if (saved) return saved;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
@@ -88,6 +91,7 @@ export default function App() {
 
   useEffect(() => {
     document.body.classList.toggle('light-theme', theme === 'light');
+    localStorage.setItem('defectx_theme', theme);
     localStorage.setItem('bugflow_theme', theme);
   }, [theme]);
 
@@ -101,6 +105,8 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('defectx_token');
+    localStorage.removeItem('defectx_user');
     localStorage.removeItem('bugflow_token');
     localStorage.removeItem('bugflow_user');
     setToken(null);
@@ -189,6 +195,15 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'analytics' && (
+          <AnalyticsView
+            token={token}
+            theme={theme}
+            toggleTheme={toggleTheme}
+          />
+        )}
+
+
         {activeTab === 'issues' && (
           <IssuesView
             issues={issues}
@@ -242,6 +257,13 @@ export default function App() {
         token={token}
         initialData={editingIssue}
         onSelectIssue={(issue) => setEditingIssue(issue)}
+      />
+
+      {/* Floating DefectX AI Assistant Chatbot (Overlay across all tabs) */}
+      <AIAssistantChatbot
+        token={token}
+        user={user}
+        activeIssue={editingIssue}
       />
     </div>
     </NotificationProvider>

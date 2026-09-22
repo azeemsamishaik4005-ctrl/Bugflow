@@ -5,11 +5,15 @@ require('dotenv').config();
 
 const { initDb, query, queryOne } = require('./db');
 const authRoutes = require('./routes/auth');
+const userRoutes = require('./routes/users');
 const projectRoutes = require('./routes/projects');
 const issueRoutes = require('./routes/issues');
 const sprintRoutes = require('./routes/sprints');
 const aiRoutes = require('./routes/ai');
+const analyticsRoutes = require('./routes/analytics');
 const notificationsRoutes = require('./routes/notifications');
+const discussionsRoutes = require('./routes/discussions');
+const swaggerDocs = require('./docs/swagger');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,23 +22,41 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+// Swagger / OpenAPI Documentation
+app.use('/api-docs', swaggerDocs.router);
+
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/issues', issueRoutes);
 app.use('/api/sprints', sprintRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api/notifications', notificationsRoutes);
-
-// Global Error Handler for API routes
-app.use('/api', (err, req, res, next) => {
-  console.error('API Error:', err.stack);
-  res.status(500).json({ error: 'Internal Server Error' });
-});
+app.use('/api/discussions', discussionsRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'BugFlow API', timestamp: new Date() });
+  res.json({ status: 'ok', service: 'DefectX API', timestamp: new Date() });
+});
+
+// Catch-all 404 for unhandled API endpoints - NEVER return HTML
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API endpoint not found: ${req.method} ${req.originalUrl}`
+  });
+});
+
+// Global Error Handler for API routes - ALWAYS return JSON
+app.use('/api', (err, req, res, next) => {
+  console.error('API Error:', err.message || err);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal Server Error',
+    error: err.message || 'Internal Server Error'
+  });
 });
 
 // Serve frontend static files
@@ -42,9 +64,13 @@ const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 
 app.get('*', (req, res) => {
-  if (!req.path.startsWith('/api')) {
-    res.sendFile(path.join(clientDistPath, 'index.html'));
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({
+      success: false,
+      message: `API endpoint not found: ${req.method} ${req.originalUrl}`
+    });
   }
+  res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
 // Seed initial demo data
@@ -57,14 +83,14 @@ async function seedInitialData() {
       
       await query(
         'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
-        ['Admin User', 'admin@bugflow.io', hash, 'admin']
+        ['Admin User', 'admin@defectx.io', hash, 'admin']
       );
 
-      const adminUser = await queryOne('SELECT id FROM users WHERE email = ?', ['admin@bugflow.io']);
+      const adminUser = await queryOne('SELECT id FROM users WHERE email = ?', ['admin@defectx.io']);
       
       await query(
         'INSERT INTO projects (name, description, owner_id) VALUES (?, ?, ?)',
-        ['Core Platform App', 'Main BugFlow Web Application Service', adminUser ? adminUser.id : 1]
+        ['Core Platform App', 'Main DefectX Web Application Service', adminUser ? adminUser.id : 1]
       );
 
       const mainProj = await queryOne('SELECT id FROM projects LIMIT 1');
@@ -131,9 +157,16 @@ async function startServer() {
   await initDb();
   await seedInitialData();
 
-  app.listen(PORT, () => {
-    console.log(`🚀 BugFlow Full-Stack Platform running at http://localhost:${PORT}`);
-  });
+  if (process.env.NODE_ENV !== 'test') {
+    app.listen(PORT, () => {
+      console.log(`🚀 DefectX Full-Stack Platform running at http://localhost:${PORT}`);
+    });
+  }
 }
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
+

@@ -3,11 +3,12 @@ const path = require('path');
 const { Pool } = require('pg');
 require('dotenv').config();
 
-const dbUrl = process.env.DATABASE_URL || 'file:./bugflow.db';
+const dbUrl = process.env.DATABASE_URL || 'file:./defectx.db';
 const isPostgres = dbUrl.startsWith('postgres://') || dbUrl.startsWith('postgresql://');
 
 let pgPool = null;
-const jsonDbPath = path.resolve(__dirname, 'bugflow_data.json');
+const jsonDbPath = path.resolve(__dirname, 'defectx_data.json');
+const legacyJsonDbPath = path.resolve(__dirname, 'bugflow_data.json');
 
 let localDb = {
   users: [],
@@ -19,7 +20,8 @@ let localDb = {
   activity_history: [],
   test_cases: [],
   notifications: [],
-  autoId: { users: 1, projects: 1, issues: 1, sprints: 1, comments: 1, attachments: 1, activity_history: 1, test_cases: 1, notifications: 1 }
+  defect_dependencies: [],
+  autoId: { users: 1, projects: 1, issues: 1, sprints: 1, comments: 1, attachments: 1, activity_history: 1, test_cases: 1, notifications: 1, defect_dependencies: 1 }
 };
 
 if (isPostgres) {
@@ -28,10 +30,11 @@ if (isPostgres) {
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
   });
 } else {
-  // Load local JSON DB if exists
-  if (fs.existsSync(jsonDbPath)) {
+  // Load local JSON DB if exists (with fallback to legacy filename)
+  const activeJsonPath = fs.existsSync(jsonDbPath) ? jsonDbPath : (fs.existsSync(legacyJsonDbPath) ? legacyJsonDbPath : null);
+  if (activeJsonPath) {
     try {
-      const content = fs.readFileSync(jsonDbPath, 'utf8');
+      const content = fs.readFileSync(activeJsonPath, 'utf8');
       localDb = { ...localDb, ...JSON.parse(content) };
       // Ensure new collections exist for backwards compatibility
       if (!localDb.sprints) localDb.sprints = [];
@@ -40,6 +43,7 @@ if (isPostgres) {
       if (!localDb.activity_history) localDb.activity_history = [];
       if (!localDb.test_cases) localDb.test_cases = [];
       if (!localDb.notifications) localDb.notifications = [];
+      if (!localDb.defect_dependencies) localDb.defect_dependencies = [];
     } catch (e) {
       console.warn('Error reading local JSON db, initializing fresh:', e.message);
     }
@@ -125,6 +129,11 @@ const query = async (sql, params = []) => {
         return {
           ...i,
           component: i.component || 'Frontend UI',
+          category: i.category || 'General',
+          environment: i.environment || 'Production',
+          root_cause: i.root_cause || null,
+          resolution_notes: i.resolution_notes || null,
+          resolved_at: i.resolved_at || null,
           project_name: proj ? proj.name : 'Core Project',
           reporter_name: reporter ? reporter.name : 'Admin',
           assignee_name: assignee ? assignee.name : null,
@@ -133,43 +142,50 @@ const query = async (sql, params = []) => {
       });
 
       let paramIdx = 0;
-    if (upperSql.includes('WHERE I.ID = ?') || upperSql.includes('WHERE ID = ?')) {
-      const targetId = parseInt(params[paramIdx++], 10);
-      issues = issues.filter(i => i.id === targetId);
-    } else if (upperSql.includes('WHERE I.TITLE = ?') || upperSql.includes('WHERE TITLE = ?')) {
-      const targetTitle = params[paramIdx++];
-      issues = issues.filter(i => i.title === targetTitle);
-    } else {
-      if (upperSql.includes('I.PROJECT_ID = ?') && params[paramIdx] !== undefined) {
-        const pid = parseInt(params[paramIdx++], 10);
-        issues = issues.filter(i => i.project_id === pid);
+      if (upperSql.includes('WHERE I.ID = ?') || upperSql.includes('WHERE ID = ?')) {
+        const targetId = parseInt(params[paramIdx++], 10);
+        issues = issues.filter(i => i.id === targetId);
+      } else if (upperSql.includes('WHERE I.TITLE = ?') || upperSql.includes('WHERE TITLE = ?')) {
+        const targetTitle = params[paramIdx++];
+        issues = issues.filter(i => i.title === targetTitle);
+      } else {
+        if (upperSql.includes("STATUS IN ('RESOLVED', 'CLOSED')") || upperSql.includes("I.STATUS IN ('RESOLVED', 'CLOSED')")) {
+          issues = issues.filter(i => i.status === 'Resolved' || i.status === 'Closed');
+        }
+        if ((upperSql.includes('I.ID != ?') || upperSql.includes('ID != ?')) && params[paramIdx] !== undefined) {
+          const excludeId = parseInt(params[paramIdx++], 10);
+          issues = issues.filter(i => i.id !== excludeId);
+        }
+        if (upperSql.includes('I.PROJECT_ID = ?') && params[paramIdx] !== undefined) {
+          const pid = parseInt(params[paramIdx++], 10);
+          issues = issues.filter(i => i.project_id === pid);
+        }
+        if (upperSql.includes('I.STATUS = ?') && params[paramIdx] !== undefined) {
+          const st = params[paramIdx++];
+          issues = issues.filter(i => i.status === st);
+        }
+        if (upperSql.includes('I.PRIORITY = ?') && params[paramIdx] !== undefined) {
+          const pr = params[paramIdx++];
+          issues = issues.filter(i => i.priority === pr);
+        }
+        if (upperSql.includes('I.SEVERITY = ?') && params[paramIdx] !== undefined) {
+          const sv = params[paramIdx++];
+          issues = issues.filter(i => i.severity === sv);
+        }
+        if (upperSql.includes('LIKE') && params[paramIdx] !== undefined) {
+          const term = (params[paramIdx++] || '').replace(/%/g, '').toLowerCase();
+          if (params[paramIdx] !== undefined) paramIdx++; // skip duplicate search param
+          issues = issues.filter(i => 
+            (i.title && i.title.toLowerCase().includes(term)) || 
+            (i.description && i.description.toLowerCase().includes(term))
+          );
+        }
       }
-      if (upperSql.includes('I.STATUS = ?') && params[paramIdx] !== undefined) {
-        const st = params[paramIdx++];
-        issues = issues.filter(i => i.status === st);
-      }
-      if (upperSql.includes('I.PRIORITY = ?') && params[paramIdx] !== undefined) {
-        const pr = params[paramIdx++];
-        issues = issues.filter(i => i.priority === pr);
-      }
-      if (upperSql.includes('I.SEVERITY = ?') && params[paramIdx] !== undefined) {
-        const sv = params[paramIdx++];
-        issues = issues.filter(i => i.severity === sv);
-      }
-      if (upperSql.includes('LIKE') && params[paramIdx] !== undefined) {
-        const term = (params[paramIdx++] || '').replace(/%/g, '').toLowerCase();
-        if (params[paramIdx] !== undefined) paramIdx++; // skip duplicate search param
-        issues = issues.filter(i => 
-          (i.title && i.title.toLowerCase().includes(term)) || 
-          (i.description && i.description.toLowerCase().includes(term))
-        );
-      }
-    }
 
-    issues.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    if (upperSql.includes('LIMIT 1')) return issues.slice(0, 1);
-    return issues;
-  }
+      issues.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      if (upperSql.includes('LIMIT 1')) return issues.slice(0, 1);
+      return issues;
+    }
 
   // 4a. SELECT COMMENTS
   if (upperSql.startsWith('SELECT') && upperSql.includes('FROM COMMENTS')) {
@@ -322,6 +338,8 @@ const query = async (sql, params = []) => {
       reporter_id: params[8] ? parseInt(params[8], 10) : null,
       assignee_id: params[9] ? parseInt(params[9], 10) : null,
       component: params[10] || 'Frontend UI',
+      category: params[11] || 'General',
+      environment: params[12] || 'Production',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -452,8 +470,38 @@ const query = async (sql, params = []) => {
     if (index !== -1) {
       if (params.length === 2 && upperSql.includes('STATUS = ?')) {
         // Direct status update
-        localDb.issues[index].status = params[0];
+        const newStatus = params[0];
+        localDb.issues[index].status = newStatus;
+        if (newStatus === 'Resolved' || newStatus === 'Closed') {
+          localDb.issues[index].resolved_at = localDb.issues[index].resolved_at || new Date().toISOString();
+        }
         localDb.issues[index].updated_at = new Date().toISOString();
+      } else if (upperSql.includes("STATUS = 'RESOLVED'") || (upperSql.includes('ROOT_CAUSE = ?') && params.length === 5)) {
+        localDb.issues[index].status = 'Resolved';
+        localDb.issues[index].root_cause = params[0];
+        localDb.issues[index].resolution_notes = params[1];
+        localDb.issues[index].resolved_at = params[2] || new Date().toISOString();
+        localDb.issues[index].updated_at = params[3] || new Date().toISOString();
+      } else if (upperSql.includes('ROOT_CAUSE') || upperSql.includes('RESOLUTION_NOTES')) {
+        // Dynamic / resolution update
+        // We can inspect parameters or update keys
+        localDb.issues[index] = {
+          ...localDb.issues[index],
+          title: params[0] !== undefined ? params[0] : localDb.issues[index].title,
+          description: params[1] !== undefined ? params[1] : localDb.issues[index].description,
+          type: params[2] !== undefined ? params[2] : localDb.issues[index].type,
+          priority: params[3] !== undefined ? params[3] : localDb.issues[index].priority,
+          severity: params[4] !== undefined ? params[4] : localDb.issues[index].severity,
+          status: params[5] !== undefined ? params[5] : localDb.issues[index].status,
+          project_id: params[6] !== undefined ? parseInt(params[6], 10) : localDb.issues[index].project_id,
+          sprint_id: params[7] !== undefined ? (params[7] ? parseInt(params[7], 10) : null) : localDb.issues[index].sprint_id,
+          assignee_id: params[8] !== undefined ? (params[8] ? parseInt(params[8], 10) : null) : localDb.issues[index].assignee_id,
+          component: params[9] !== undefined ? params[9] : localDb.issues[index].component,
+          root_cause: params[10] !== undefined ? params[10] : localDb.issues[index].root_cause,
+          resolution_notes: params[11] !== undefined ? params[11] : localDb.issues[index].resolution_notes,
+          resolved_at: params[12] !== undefined ? params[12] : localDb.issues[index].resolved_at,
+          updated_at: params[13] || new Date().toISOString()
+        };
       } else {
         localDb.issues[index] = {
           ...localDb.issues[index],
@@ -483,6 +531,70 @@ const query = async (sql, params = []) => {
     localDb.issues = localDb.issues.filter(i => i.id !== targetId);
     saveLocalDb();
     return { changes: initialLen - localDb.issues.length };
+  }
+
+  // 10. DELETE PROJECTS
+  if (upperSql.startsWith('DELETE FROM PROJECTS')) {
+    const targetId = parseInt(params[0], 10);
+    const initialLen = localDb.projects.length;
+    localDb.projects = localDb.projects.filter(p => p.id !== targetId);
+    saveLocalDb();
+    return { changes: initialLen - localDb.projects.length };
+  }
+
+  // 11. DEFECT DEPENDENCIES
+  if (upperSql.includes('FROM DEFECT_DEPENDENCIES')) {
+    let deps = [...(localDb.defect_dependencies || [])];
+    if (upperSql.includes('ISSUE_ID = ? AND RELATED_ISSUE_ID = ?') && params.length >= 2) {
+      const p1 = parseInt(params[0], 10);
+      const p2 = parseInt(params[1], 10);
+      deps = deps.filter(d => (d.issue_id === p1 && d.related_issue_id === p2) || (d.issue_id === p2 && d.related_issue_id === p1));
+    } else if (upperSql.includes('WHERE ISSUE_ID = ?') || upperSql.includes('WHERE D.ISSUE_ID = ?') || upperSql.includes('D.ISSUE_ID = ? OR D.RELATED_ISSUE_ID = ?')) {
+      const targetId = parseInt(params[0], 10);
+      deps = deps.filter(d => d.issue_id === targetId || d.related_issue_id === targetId);
+    } else if (upperSql.includes('WHERE ID = ?') || upperSql.includes('WHERE D.ID = ?')) {
+      const depId = parseInt(params[0], 10);
+      deps = deps.filter(d => d.id === depId);
+    }
+    return deps.map(d => {
+      const issue = localDb.issues.find(i => i.id === d.issue_id);
+      const related = localDb.issues.find(i => i.id === d.related_issue_id);
+      const creator = localDb.users.find(u => u.id === d.created_by);
+      return {
+        ...d,
+        issue_title: issue ? issue.title : '',
+        issue_status: issue ? issue.status : 'Open',
+        related_title: related ? related.title : '',
+        related_status: related ? related.status : 'Open',
+        related_severity: related ? related.severity : 'Medium',
+        related_priority: related ? related.priority : 'P2',
+        related_component: related ? related.component : 'Frontend UI',
+        creator_name: creator ? creator.name : 'Team Member'
+      };
+    });
+  }
+
+  if (upperSql.startsWith('INSERT INTO DEFECT_DEPENDENCIES')) {
+    const newDep = {
+      id: localDb.autoId.defect_dependencies++,
+      issue_id: parseInt(params[0], 10),
+      related_issue_id: parseInt(params[1], 10),
+      relationship_type: params[2],
+      created_by: params[3] ? parseInt(params[3], 10) : null,
+      created_at: new Date().toISOString()
+    };
+    if (!localDb.defect_dependencies) localDb.defect_dependencies = [];
+    localDb.defect_dependencies.push(newDep);
+    saveLocalDb();
+    return [newDep];
+  }
+
+  if (upperSql.startsWith('DELETE FROM DEFECT_DEPENDENCIES')) {
+    const targetId = parseInt(params[0], 10);
+    const initialLen = (localDb.defect_dependencies || []).length;
+    localDb.defect_dependencies = (localDb.defect_dependencies || []).filter(d => d.id !== targetId);
+    saveLocalDb();
+    return { changes: initialLen - localDb.defect_dependencies.length };
   }
 
   return [];
@@ -577,13 +689,35 @@ const initDb = async () => {
         );
       `);
 
-      // Modify existing issues table to add assignee_id and component if they don't exist
+      // Modify existing issues table to add assignee_id, component, category, environment, root_cause, resolution_notes, resolved_at
       try {
         await query('ALTER TABLE issues ADD COLUMN IF NOT EXISTS assignee_id INT REFERENCES users(id) ON DELETE SET NULL;');
         await query("ALTER TABLE issues ADD COLUMN IF NOT EXISTS component VARCHAR(100) DEFAULT 'Frontend UI';");
+        await query("ALTER TABLE issues ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'General';");
+        await query("ALTER TABLE issues ADD COLUMN IF NOT EXISTS environment VARCHAR(50) DEFAULT 'Production';");
+        await query('ALTER TABLE issues ADD COLUMN IF NOT EXISTS root_cause TEXT;');
+        await query('ALTER TABLE issues ADD COLUMN IF NOT EXISTS resolution_notes TEXT;');
+        await query('ALTER TABLE issues ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP;');
+
+        // PostgreSQL Performance Indexes for Milestone 4
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_project_id ON issues(project_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_severity ON issues(severity);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_component ON issues(component);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_category ON issues(category);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_environment ON issues(environment);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_assignee_id ON issues(assignee_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_reporter_id ON issues(reporter_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_sprint_id ON issues(sprint_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_created_at ON issues(created_at DESC);');
+        await query('CREATE INDEX IF NOT EXISTS idx_comments_issue_id ON comments(issue_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_activity_history_issue_id ON activity_history(issue_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, is_read);');
       } catch (err) {
-        console.warn('Could not alter issues table (maybe not needed):', err.message);
+        console.warn('Could not alter issues table or create indexes:', err.message);
       }
+
 
       await query(`
         CREATE TABLE IF NOT EXISTS comments (
@@ -633,6 +767,27 @@ const initDb = async () => {
         );
       `);
 
+      await query(`
+        CREATE TABLE IF NOT EXISTS defect_dependencies (
+          id SERIAL PRIMARY KEY,
+          issue_id INT REFERENCES issues(id) ON DELETE CASCADE,
+          related_issue_id INT REFERENCES issues(id) ON DELETE CASCADE,
+          relationship_type VARCHAR(50) NOT NULL,
+          created_by INT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT uq_defect_dependencies UNIQUE(issue_id, related_issue_id, relationship_type)
+        );
+      `);
+
+      try {
+        await query('CREATE INDEX IF NOT EXISTS idx_defect_dependencies_issue ON defect_dependencies(issue_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_defect_dependencies_related ON defect_dependencies(related_issue_id);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_proj_status ON issues(project_id, status);');
+        await query('CREATE INDEX IF NOT EXISTS idx_issues_status_sev ON issues(status, severity);');
+      } catch (e) {
+        console.warn('Could not create dependency indexes:', e.message);
+      }
+
       console.log('✅ PostgreSQL schema initialized successfully.');
     } catch (err) {
       console.error('❌ Error initializing PostgreSQL schema:', err);
@@ -645,5 +800,8 @@ const initDb = async () => {
 module.exports = {
   query,
   queryOne,
-  initDb
+  initDb,
+  getLocalDb: () => localDb,
+  saveLocalDb
 };
+

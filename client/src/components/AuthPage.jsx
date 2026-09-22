@@ -39,6 +39,8 @@ export default function AuthPage({ onLoginSuccess }) {
         throw new Error(data?.error || 'Authentication failed');
       }
 
+      localStorage.setItem('defectx_token', data.token);
+      localStorage.setItem('defectx_user', JSON.stringify(data.user));
       localStorage.setItem('bugflow_token', data.token);
       localStorage.setItem('bugflow_user', JSON.stringify(data.user));
       onLoginSuccess(data.user, data.token);

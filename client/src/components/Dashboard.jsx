@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Plus, Search, Filter, Edit3, Trash2, ShieldAlert, Sparkles, Moon, Sun, LayoutGrid } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Plus, Search, Filter, Edit3, Trash2, ShieldAlert, Sparkles, Moon, Sun, LayoutGrid, Activity, Lightbulb } from 'lucide-react';
 import { DEFECT_COMPONENTS } from '../constants';
 
 export default function Dashboard({ issues, stats, componentStats, projects, onRefresh, onRequestReportIssue, onEditIssue, onDeleteIssue, token, theme, toggleTheme }) {
@@ -7,11 +7,37 @@ export default function Dashboard({ issues, stats, componentStats, projects, onR
   const [statusFilter, setStatusFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [componentFilter, setComponentFilter] = useState('');
+  const [earlyWarning, setEarlyWarning] = useState(null);
+  const [insightOfDay, setInsightOfDay] = useState(null);
+
+  useEffect(() => {
+    if (!token) return;
+    const fetchDashboardExtras = async () => {
+      try {
+        const [warnRes, insightRes] = await Promise.all([
+          fetch('/api/analytics/early-warning', { headers: { 'Authorization': `Bearer ${token}` } }),
+          fetch('/api/analytics/insight-of-the-day', { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
+        if (warnRes.ok) {
+          const warnData = await warnRes.json();
+          setEarlyWarning(warnData);
+        }
+        if (insightRes.ok) {
+          const insightData = await insightRes.json();
+          setInsightOfDay(insightData);
+        }
+      } catch (err) {
+        console.error('Failed to load dashboard telemetry extras', err);
+      }
+    };
+    fetchDashboardExtras();
+  }, [token, issues.length]);
 
   const filteredIssues = issues.filter(issue => {
     const matchesSearch = !searchTerm || 
       issue.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      (issue.description && issue.description.toLowerCase().includes(searchTerm.toLowerCase()));
+      (issue.description && issue.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      `DEF-${issue.id}`.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = !statusFilter || issue.status === statusFilter;
     const matchesPriority = !priorityFilter || issue.priority === priorityFilter;
     const matchesComponent = !componentFilter || issue.component === componentFilter;
@@ -43,14 +69,14 @@ export default function Dashboard({ issues, stats, componentStats, projects, onR
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: '32px'
+        marginBottom: '28px'
       }}>
         <div>
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.5px' }}>
             System Dashboard
           </h1>
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Real-time software telemetry, issue tracking, and resolution metrics.
+            Real-time DefectX telemetry, issue tracking, and resolution metrics.
           </p>
         </div>
 
@@ -64,6 +90,112 @@ export default function Dashboard({ issues, stats, componentStats, projects, onR
           </button>
         </div>
       </div>
+
+      {/* MILESTONE 4: Critical Defect Early Warning Alert */}
+      {earlyWarning && earlyWarning.has_warning && (
+        <div style={{
+          background: earlyWarning.status === 'CRITICAL_ALERT' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+          border: `1px solid ${earlyWarning.status === 'CRITICAL_ALERT' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.35)'}`,
+          borderLeft: `5px solid ${earlyWarning.status === 'CRITICAL_ALERT' ? '#EF4444' : '#F59E0B'}`,
+          borderRadius: '12px',
+          padding: '18px 22px',
+          marginBottom: '24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <ShieldAlert size={22} color={earlyWarning.status === 'CRITICAL_ALERT' ? '#EF4444' : '#F59E0B'} />
+              <strong style={{ fontSize: '1.02rem', color: 'var(--text-main)' }}>
+                {earlyWarning.status === 'CRITICAL_ALERT' ? 'Critical Defect Surge Alert' : 'Defect Spike Early Warning'}
+              </strong>
+              <span style={{
+                fontSize: '0.75rem', fontWeight: 800, padding: '2px 8px', borderRadius: '10px',
+                background: earlyWarning.status === 'CRITICAL_ALERT' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                color: earlyWarning.status === 'CRITICAL_ALERT' ? '#F87171' : '#FBBF24'
+              }}>
+                {earlyWarning.status}
+              </span>
+            </div>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              {earlyWarning.critical_unresolved_count} active critical defects
+            </span>
+          </div>
+
+          <p style={{ margin: 0, fontSize: '0.88rem', color: 'var(--text-main)', lineHeight: '1.4' }}>
+            {earlyWarning.message}
+          </p>
+
+          {earlyWarning.affected_components && earlyWarning.affected_components.length > 0 && (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Affected Components:</span>
+              {earlyWarning.affected_components.map((c, i) => (
+                <span key={i} style={{ fontSize: '0.75rem', background: 'rgba(239, 68, 68, 0.15)', color: '#F87171', padding: '2px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                  {typeof c === 'object' && c !== null ? `${c.component} (${c.critical_count})` : String(c)}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {earlyWarning.recommendations && earlyWarning.recommendations.length > 0 && (
+            <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px', marginTop: '2px' }}>
+              <strong>Recommended Action:</strong> {earlyWarning.recommendations[0]}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MILESTONE 4: Insight of the Day Card */}
+      {insightOfDay && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.06) 100%)',
+          border: '1px solid rgba(129, 140, 248, 0.25)',
+          borderRadius: '12px',
+          padding: '16px 20px',
+          marginBottom: '28px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '280px' }}>
+            <div style={{
+              width: '38px', height: '38px', borderRadius: '10px',
+              background: 'rgba(99, 102, 241, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#818CF8', flexShrink: 0
+            }}>
+              <Lightbulb size={20} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+                <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.6px', color: '#818CF8', fontWeight: 800 }}>
+                  Insight of the Day
+                </span>
+                <span style={{ fontSize: '0.72rem', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', padding: '1px 6px', borderRadius: '4px' }}>
+                  {insightOfDay.category || 'Quality Metric'}
+                </span>
+              </div>
+              <strong style={{ fontSize: '0.92rem', color: 'var(--text-main)', display: 'block' }}>
+                {insightOfDay.title || insightOfDay.headline || 'Quality Telemetry Insight'}
+              </strong>
+              <p style={{ margin: '2px 0 0', fontSize: '0.84rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                {insightOfDay.description || insightOfDay.explanation || insightOfDay.insight || ''}
+              </p>
+            </div>
+          </div>
+          {insightOfDay.recommendation && (
+            <div style={{
+              background: 'var(--bg-modal)', border: '1px solid rgba(129, 140, 248, 0.2)',
+              borderRadius: '8px', padding: '8px 14px', fontSize: '0.8rem', color: 'var(--text-main)',
+              maxWidth: '380px'
+            }}>
+              <strong style={{ color: '#818CF8' }}>Actionable Tip:</strong> {insightOfDay.recommendation}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* KPI Cards Grid */}
       <div style={{
@@ -297,19 +429,20 @@ export default function Dashboard({ issues, stats, componentStats, projects, onR
           <table className="custom-table">
             <thead>
               <tr>
-                <th style={{ width: '70px' }}>ID</th>
-                <th style={{ width: '100px' }}>Type</th>
+                <th style={{ width: '85px' }}>Defect ID</th>
+                <th style={{ width: '85px' }}>Type</th>
                 <th>Title & Description</th>
-                <th style={{ width: '100px' }}>Priority</th>
-                <th style={{ width: '110px' }}>Severity</th>
-                <th style={{ width: '140px' }}>Status</th>
-                <th style={{ width: '110px', textAlign: 'right' }}>Actions</th>
+                <th style={{ width: '90px' }}>Priority</th>
+                <th style={{ width: '95px' }}>Severity</th>
+                <th style={{ width: '135px' }}>Health</th>
+                <th style={{ width: '135px' }}>Status</th>
+                <th style={{ width: '100px', textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredIssues.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                     No issues found matching criteria. Click <strong>Report Issue</strong> to create one.
                   </td>
                 </tr>
@@ -317,7 +450,7 @@ export default function Dashboard({ issues, stats, componentStats, projects, onR
                 filteredIssues.map((issue) => (
                   <tr key={issue.id}>
                     <td style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--primary-light)', fontWeight: 700 }}>
-                      #{issue.id}
+                      DEF-{issue.id}
                     </td>
                     <td>
                       <span className={`badge ${issue.type === 'Feature' ? 'badge-p3' : 'badge-p1'}`}>
@@ -353,6 +486,33 @@ export default function Dashboard({ issues, stats, componentStats, projects, onR
                       <span className={`badge badge-${(issue.severity || 'major').toLowerCase()}`}>
                         {issue.severity || 'Major'}
                       </span>
+                    </td>
+                    <td>
+                      {(() => {
+                        const healthObj = issue.health_indicator;
+                        const health = typeof healthObj === 'object' && healthObj !== null
+                          ? (healthObj.status || healthObj.label || 'Healthy')
+                          : (healthObj || 'Healthy');
+                        const color = 
+                          health === 'Critical Overdue' ? '#EF4444' :
+                          health === 'At Risk' ? '#F97316' :
+                          health === 'Attention Needed' ? '#F59E0B' : '#10B981';
+                        const bg = 
+                          health === 'Critical Overdue' ? 'rgba(239, 68, 68, 0.15)' :
+                          health === 'At Risk' ? 'rgba(249, 115, 22, 0.15)' :
+                          health === 'Attention Needed' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)';
+
+                        return (
+                          <span style={{
+                            fontSize: '0.74rem', fontWeight: 700, padding: '3px 8px', borderRadius: '8px',
+                            background: bg, color: color, display: 'inline-flex', alignItems: 'center', gap: '5px',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color }}></span>
+                            {health}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td>
                       <select

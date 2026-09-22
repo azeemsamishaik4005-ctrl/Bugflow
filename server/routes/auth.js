@@ -5,7 +5,7 @@ const { query, queryOne } = require('../db');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'bugflow_super_secret_jwt_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'defectx_super_secret_jwt_key_2026';
 
 // Register User
 router.post('/register', async (req, res) => {

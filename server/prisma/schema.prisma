@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int            @id @default(autoincrement())
+  name          String         @db.VarChar(255)
+  email         String         @unique @db.VarChar(255)
+  password_hash String         @db.VarChar(255)
+  role          String?        @default("user") @db.VarChar(50)
+  created_at    DateTime?      @default(now()) @db.Timestamp(6)
+  
+  projects      Project[]      @relation("ProjectOwner")
+  reportedIssues Issue[]       @relation("ReportedIssues")
+  assignedIssues Issue[]       @relation("AssignedIssues")
+  comments      Comment[]
+  activityLogs  ActivityHistory[]
+  notifications Notification[] @relation("UserNotifications")
+  actedNotifications Notification[] @relation("ActorNotifications")
+
+  @@map("users")
+}
+
+model Project {
+  id          Int            @id @default(autoincrement())
+  name        String         @db.VarChar(255)
+  description String?
+  owner_id    Int?
+  created_at  DateTime?      @default(now()) @db.Timestamp(6)
+
+  owner       User?          @relation("ProjectOwner", fields: [owner_id], references: [id], onDelete: Cascade)
+  issues      Issue[]
+  sprints     Sprint[]
+  notifications Notification[]
+
+  @@map("projects")
+}
+
+model Sprint {
+  id         Int       @id @default(autoincrement())
+  project_id Int
+  name       String    @db.VarChar(100)
+  start_date DateTime  @db.Date
+  end_date   DateTime  @db.Date
+  status     String?   @default("Planned") @db.VarChar(20)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  project    Project   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  issues     Issue[]
+
+  @@map("sprints")
+}
+
+model Issue {
+  id               Int               @id @default(autoincrement())
+  project_id       Int
+  sprint_id        Int?
+  title            String            @db.VarChar(255)
+  description      String
+  type             String?           @default("Bug") @db.VarChar(50)
+  priority         String?           @default("P2") @db.VarChar(10)
+  severity         String?           @default("Medium") @db.VarChar(50)
+  status           String?           @default("Open") @db.VarChar(50)
+  reporter_id      Int?
+  assignee_id      Int?
+  component        String?           @default("Frontend UI") @db.VarChar(100)
+  category         String?           @default("General") @db.VarChar(100)
+  environment      String?           @default("Production") @db.VarChar(50)
+  root_cause       String?
+  resolution_notes String?
+  resolved_at      DateTime?         @db.Timestamp(6)
+  created_at       DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?         @default(now()) @db.Timestamp(6)
+
+  project          Project           @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  sprint           Sprint?           @relation(fields: [sprint_id], references: [id], onDelete: SetNull)
+  reporter         User?             @relation("ReportedIssues", fields: [reporter_id], references: [id], onDelete: SetNull)
+  assignee         User?             @relation("AssignedIssues", fields: [assignee_id], references: [id], onDelete: SetNull)
+  comments         Comment[]
+  testCases        TestCase[]
+  activityHistory  ActivityHistory[]
+  notifications    Notification[]
+  outgoingDependencies DefectDependency[] @relation("OutgoingDependencies")
+  incomingDependencies DefectDependency[] @relation("IncomingDependencies")
+
+  @@index([project_id])
+  @@index([status])
+  @@index([priority])
+  @@index([severity])
+  @@index([component])
+  @@index([created_at(sort: Desc)])
+  @@map("issues")
+}
+
+model DefectDependency {
+  id                Int       @id @default(autoincrement())
+  issue_id          Int
+  related_issue_id  Int
+  relationship_type String    @db.VarChar(50)
+  created_by        Int?
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+
+  issue             Issue     @relation("OutgoingDependencies", fields: [issue_id], references: [id], onDelete: Cascade)
+  relatedIssue      Issue     @relation("IncomingDependencies", fields: [related_issue_id], references: [id], onDelete: Cascade)
+
+  @@unique([issue_id, related_issue_id, relationship_type])
+  @@index([issue_id])
+  @@index([related_issue_id])
+  @@map("defect_dependencies")
+}
+
+model Comment {
+  id                Int       @id @default(autoincrement())
+  issue_id          Int
+  user_id           Int
+  parent_message_id Int?
+  content           String
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @db.Timestamp(6)
+  deleted_at        DateTime? @db.Timestamp(6)
+
+  issue             Issue     @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  user              User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  parent            Comment?  @relation("CommentReplies", fields: [parent_message_id], references: [id], onDelete: Cascade)
+  replies           Comment[] @relation("CommentReplies")
+
+  @@map("comments")
+}
+
+model TestCase {
+  id              Int       @id @default(autoincrement())
+  issue_id        Int
+  scenario        String    @db.VarChar(255)
+  preconditions   String?
+  steps           String
+  expected_result String
+  priority        String?   @db.VarChar(50)
+  type            String?   @db.VarChar(50)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+
+  issue           Issue     @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+
+  @@map("test_cases")
+}
+
+model ActivityHistory {
+  id         Int       @id @default(autoincrement())
+  issue_id   Int
+  user_id    Int
+  action     String    @db.VarChar(255)
+  old_state  String?
+  new_state  String?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  issue      Issue     @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("activity_history")
+}
+
+model Notification {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  type       String    @db.VarChar(50)
+  title      String    @db.VarChar(255)
+  message    String
+  issue_id   Int?
+  project_id Int?
+  actor_id   Int?
+  is_read    Boolean?  @default(false)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  user       User      @relation("UserNotifications", fields: [user_id], references: [id], onDelete: Cascade)
+  actor      User?     @relation("ActorNotifications", fields: [actor_id], references: [id], onDelete: SetNull)
+  issue      Issue?    @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  project    Project?  @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}

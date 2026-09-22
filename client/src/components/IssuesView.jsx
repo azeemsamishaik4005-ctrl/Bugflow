@@ -24,53 +24,117 @@ const getStatusColor = (status) => {
 };
 
 export default function IssuesView({ issues, projects, onRequestReportIssue, onEditIssue, token, theme, toggleTheme }) {
-  const [viewMode, setViewMode] = useState(localStorage.getItem('bugflow_issues_view') || 'grid');
+  const [viewMode, setViewMode] = useState(localStorage.getItem('defectx_issues_view') || localStorage.getItem('bugflow_issues_view') || 'grid');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [componentFilter, setComponentFilter] = useState('');
+  const [healthFilter, setHealthFilter] = useState('');
   const [sortBy, setSortBy] = useState('recently_updated'); // recently_updated, newest, priority, status
+
+  // Milestone 4: Semantic Search State
+  const [semanticMode, setSemanticMode] = useState(false);
+  const [semanticResults, setSemanticResults] = useState(null);
+  const [semanticLoading, setSemanticLoading] = useState(false);
 
   // Toggle View
   const toggleViewMode = (mode) => {
     setViewMode(mode);
-    localStorage.setItem('bugflow_issues_view', mode);
+    localStorage.setItem('defectx_issues_view', mode);
   };
+
+  // Debounced Semantic Search
+  React.useEffect(() => {
+    if (!semanticMode || !searchTerm.trim() || searchTerm.trim().length < 2) {
+      setSemanticResults(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setSemanticLoading(true);
+      try {
+        const res = await fetch('/api/ai/semantic-search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ query: searchTerm, limit: 30 })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSemanticResults(data.results || []);
+        }
+      } catch (err) {
+        console.error('Semantic search failed', err);
+      } finally {
+        setSemanticLoading(false);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, semanticMode, token]);
 
   // Filter & Sort Issues
   const filteredAndSortedIssues = useMemo(() => {
-    let result = issues.filter(issue => {
-      const matchesSearch = !searchTerm || 
+    let baseList = issues;
+
+    // When semantic mode is on and we have results, use semantic ranking
+    if (semanticMode && semanticResults && searchTerm.trim().length >= 2) {
+      const semMap = new Map(semanticResults.map(s => [s.id, s]));
+      baseList = semanticResults.map(s => {
+        const original = issues.find(i => i.id === s.id);
+        return {
+          ...(original || {}),
+          ...s,
+          similarity: s.similarity,
+          matched_terms: s.matched_terms
+        };
+      });
+    }
+
+    let result = baseList.filter(issue => {
+      // If in semantic mode with results, search filter is already handled by vector engine
+      const matchesSearch = (semanticMode && semanticResults) ? true : (!searchTerm || 
         issue.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
         (issue.description && issue.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        `ISS-${issue.id}`.toLowerCase().includes(searchTerm.toLowerCase());
+        `DEF-${issue.id}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        `ISS-${issue.id}`.toLowerCase().includes(searchTerm.toLowerCase()));
+
       const matchesStatus = !statusFilter || issue.status === statusFilter;
       const matchesPriority = !priorityFilter || issue.priority === priorityFilter;
       const matchesComponent = !componentFilter || issue.component === componentFilter;
-      return matchesSearch && matchesStatus && matchesPriority && matchesComponent;
+      const issueHealth = typeof issue.health_indicator === 'object' && issue.health_indicator !== null
+        ? (issue.health_indicator.status || issue.health_indicator.label || 'Healthy')
+        : (issue.health_indicator || 'Healthy');
+      const matchesHealth = !healthFilter || issueHealth === healthFilter;
+
+      return matchesSearch && matchesStatus && matchesPriority && matchesComponent && matchesHealth;
     });
 
-    result.sort((a, b) => {
-      if (sortBy === 'recently_updated') {
-        const dateA = new Date(a.updated_at || a.created_at);
-        const dateB = new Date(b.updated_at || b.created_at);
-        return dateB - dateA;
-      }
-      if (sortBy === 'newest') {
-        return new Date(b.created_at) - new Date(a.created_at);
-      }
-      if (sortBy === 'priority') {
-        const priorityOrder = { 'P1': 1, 'P2': 2, 'P3': 3 };
-        return (priorityOrder[a.priority] || 99) - (priorityOrder[b.priority] || 99);
-      }
-      if (sortBy === 'status') {
-        return a.status.localeCompare(b.status);
-      }
-      return 0;
-    });
+    if (!semanticMode || !semanticResults) {
+      result.sort((a, b) => {
+        if (sortBy === 'recently_updated') {
+          const dateA = new Date(a.updated_at || a.created_at);
+          const dateB = new Date(b.updated_at || b.created_at);
+          return dateB - dateA;
+        }
+        if (sortBy === 'newest') {
+          return new Date(b.created_at) - new Date(a.created_at);
+        }
+        if (sortBy === 'priority') {
+          const priorityOrder = { 'P1': 1, 'P2': 2, 'P3': 3 };
+          return (priorityOrder[a.priority] || 99) - (priorityOrder[b.priority] || 99);
+        }
+        if (sortBy === 'status') {
+          return a.status.localeCompare(b.status);
+        }
+        return 0;
+      });
+    }
 
     return result;
-  }, [issues, searchTerm, statusFilter, priorityFilter, componentFilter, sortBy]);
+  }, [issues, searchTerm, statusFilter, priorityFilter, componentFilter, healthFilter, sortBy, semanticMode, semanticResults]);
 
   const getTimeAgo = (dateString) => {
     const diff = Math.floor((new Date() - new Date(dateString)) / 60000); // minutes
@@ -138,17 +202,39 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
           alignItems: 'center'
         }}>
           
-          <div style={{ position: 'relative', flex: '1', minWidth: '200px' }}>
+          <div style={{ position: 'relative', flex: '1', minWidth: '220px' }}>
             <Search size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }} />
             <input
               type="text"
-              placeholder="Search issues by ID, title, or keyword..."
+              placeholder={semanticMode ? "Semantic Search: e.g., login token expiration..." : "Search issues by ID, title, or keyword..."}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="input-field"
               style={{ paddingLeft: '38px', margin: 0, height: '38px' }}
             />
           </div>
+
+          <button
+            type="button"
+            onClick={() => setSemanticMode(!semanticMode)}
+            className="btn-secondary"
+            style={{
+              height: '38px',
+              padding: '0 14px',
+              fontSize: '0.82rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: semanticMode ? 'var(--primary-glow)' : undefined,
+              color: semanticMode ? 'var(--primary-light)' : 'var(--text-muted)',
+              borderColor: semanticMode ? 'var(--primary-light)' : undefined,
+              fontWeight: semanticMode ? 700 : 500
+            }}
+            title="Enable TF-IDF Vector & Technical Synonym Search across all defects"
+          >
+            <Sparkles size={15} color={semanticMode ? 'var(--primary-light)' : 'var(--text-muted)'} />
+            AI Semantic Search
+          </button>
 
           <select className="input-field" style={{ width: 'auto', height: '38px', margin: 0 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">All Statuses</option>
@@ -165,6 +251,14 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
             <option value="P3">P3 (Normal)</option>
           </select>
 
+          <select className="input-field" style={{ width: 'auto', height: '38px', margin: 0 }} value={healthFilter} onChange={(e) => setHealthFilter(e.target.value)}>
+            <option value="">All Health</option>
+            <option value="Healthy">Healthy</option>
+            <option value="Attention Needed">Attention Needed</option>
+            <option value="At Risk">At Risk</option>
+            <option value="Critical Overdue">Critical Overdue</option>
+          </select>
+
           <select className="input-field" style={{ width: 'auto', height: '38px', margin: 0 }} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
             <option value="recently_updated">Sort: Recently Updated</option>
             <option value="newest">Sort: Newest First</option>
@@ -172,6 +266,21 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
             <option value="status">Sort: Status</option>
           </select>
         </div>
+
+        {semanticMode && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'linear-gradient(90deg, rgba(124, 58, 237, 0.12) 0%, rgba(59, 130, 246, 0.08) 100%)',
+            border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '8px',
+            padding: '8px 14px', marginTop: '10px', fontSize: '0.8rem', color: 'var(--primary-light)'
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Sparkles size={14} /> AI Semantic Matching active: TF-IDF indexing & technical synonym expansion.
+            </span>
+            {semanticLoading && <span>Searching conceptual similarity...</span>}
+            {semanticResults && <span>Found {semanticResults.length} conceptually matched defect{semanticResults.length === 1 ? '' : 's'}</span>}
+          </div>
+        )}
       </div>
 
       {/* Issues Content Area */}
@@ -191,7 +300,7 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
             {issues.length === 0 ? (
               <button onClick={onRequestReportIssue} className="btn-primary"><Plus size={16}/> Report Issue</button>
             ) : (
-              <button onClick={() => { setSearchTerm(''); setStatusFilter(''); setPriorityFilter(''); setComponentFilter(''); }} className="btn-secondary">
+              <button onClick={() => { setSearchTerm(''); setStatusFilter(''); setPriorityFilter(''); setComponentFilter(''); setHealthFilter(''); setSemanticMode(false); }} className="btn-secondary">
                 Clear Filters
               </button>
             )}
@@ -230,9 +339,16 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
                 {/* Meta */}
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '0.8rem', background: 'var(--border-hover)', color: 'var(--text-main)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                      ISS-{issue.id}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.8rem', background: 'var(--border-hover)', color: 'var(--text-main)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                        DEF-{issue.id}
+                      </span>
+                      {issue.similarity !== undefined && (
+                        <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--primary-light)', fontWeight: 700 }}>
+                          {Math.round(issue.similarity * 100)}% Match
+                        </span>
+                      )}
+                    </div>
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <span title="Discussions" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                         <MessageSquare size={12} /> {issue.discussion_count || 0}
@@ -267,6 +383,32 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
                       ● {issue.status}
                     </span>
                   </div>
+
+                  {/* Health Indicator Pill */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    {(() => {
+                      const healthObj = issue.health_indicator;
+                      const health = typeof healthObj === 'object' && healthObj !== null
+                        ? (healthObj.status || healthObj.label || 'Healthy')
+                        : (healthObj || 'Healthy');
+                      const color = 
+                        health === 'Critical Overdue' ? '#EF4444' :
+                        health === 'At Risk' ? '#F97316' :
+                        health === 'Attention Needed' ? '#F59E0B' : '#10B981';
+                      return (
+                        <span style={{ fontSize: '0.72rem', color: color, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color }}></span>
+                          {health}
+                        </span>
+                      );
+                    })()}
+
+                    {issue.component && (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-subtle)', background: 'rgba(255,255,255,0.03)', padding: '1px 6px', borderRadius: '4px' }}>
+                        {issue.component}
+                      </span>
+                    )}
+                  </div>
                   
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -291,6 +433,7 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
                 <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-color)' }}>
                   <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>ID</th>
                   <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>Title</th>
+                  <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>Health</th>
                   <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>Status</th>
                   <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>Priority</th>
                   <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>Assignee</th>
@@ -307,12 +450,40 @@ export default function IssuesView({ issues, projects, onRequestReportIssue, onE
                     onMouseOver={(e) => e.currentTarget.style.background = 'var(--btn-secondary-hover)'}
                     onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
                   >
-                    <td style={{ padding: '12px 16px', fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: 600 }}>ISS-{issue.id}</td>
+                    <td style={{ padding: '12px 16px', fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: 600 }}>
+                      DEF-{issue.id}
+                    </td>
                     <td style={{ padding: '12px 16px', fontSize: '0.9rem', color: 'var(--text-main)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {issue.type === 'Feature' ? <Sparkles size={14} color="#10B981" /> : <Bug size={14} color="var(--primary-light)" />}
-                        {issue.title}
+                        <span>{issue.title}</span>
+                        {issue.similarity !== undefined && (
+                          <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--primary-light)', fontWeight: 700 }}>
+                            {Math.round(issue.similarity * 100)}% Match
+                          </span>
+                        )}
                       </div>
+                    </td>
+                    <td style={{ padding: '12px 16px' }}>
+                      {(() => {
+                        const healthObj = issue.health_indicator;
+                        const health = typeof healthObj === 'object' && healthObj !== null
+                          ? (healthObj.status || healthObj.label || 'Healthy')
+                          : (healthObj || 'Healthy');
+                        const color = 
+                          health === 'Critical Overdue' ? '#EF4444' :
+                          health === 'At Risk' ? '#F97316' :
+                          health === 'Attention Needed' ? '#F59E0B' : '#10B981';
+                        const bg = 
+                          health === 'Critical Overdue' ? 'rgba(239, 68, 68, 0.15)' :
+                          health === 'At Risk' ? 'rgba(249, 115, 22, 0.15)' :
+                          health === 'Attention Needed' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)';
+                        return (
+                          <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '10px', background: bg, color: color, fontWeight: 700 }}>
+                            {health}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       <span style={{ 
